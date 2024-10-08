@@ -1,4 +1,3 @@
-export RAGStore
 
 using JLD2
 
@@ -11,26 +10,14 @@ include("TestcaseStore.jl")
 A struct to manage both DatasetStore and TestcaseStore.
 
 # Fields
-- `filename::String`: The base name of the files to save/load the store.
-- `cache_dir::String`: The directory where cache files are stored.
 - `dataset_store::DatasetStore`: The DatasetStore object for managing indices.
 - `testcase_store::TestcaseStore`: The TestcaseStore object for managing questions/test cases.
+- `cache_dir::String`: The directory where cache files are stored.
 """
-struct RAGStore
-    filename::String
-    cache_dir::String
-    dataset_store::DatasetStore 
-    testcase_store::TestcaseStore 
-end
-
-function RAGStore(filename::String, cache_dir::String = joinpath(dirname(@__DIR__), "benchmark_data"))
-    dataset_file = joinpath(cache_dir, "$(filename)_dataset.jld2")
-    testcase_file = joinpath(cache_dir, "$(filename)_testcase.jld2")
-    
-    if isfile(dataset_file) && isfile(testcase_file)
-        return load_store(joinpath(cache_dir, filename))
-    end
-    return RAGStore(filename, cache_dir, DatasetStore(), TestcaseStore())
+@kwdef struct RAGStore
+    dataset_store::DatasetStore = DatasetStore()
+    testcase_store::TestcaseStore = TestcaseStore()
+    cache_dir::String = joinpath(dirname(@__DIR__), "benchmark_data")
 end
 
 """
@@ -50,7 +37,6 @@ Append a new index and its associated question/test case to the store.
 function Base.append!(store::RAGStore, index::OrderedDict{String, String}, question::NamedTuple)
     index_id = append!(store.dataset_store, index)
     append!(store.testcase_store, index_id, question)
-    save_store(store)  # Save the store after appending
     return index_id
 end
 
@@ -87,38 +73,42 @@ function get_questions(store::RAGStore, index_id::String)
 end
 
 """
-    save_store(store::RAGStore)
+    save_store(filename::String, store::Store)
 
 Save a Store object to JLD2 files.
 
 # Arguments
-- `store::RAGStore`: The RAGStore object to save.
+- `filename::String`: The base name of the files to save the store to.
+- `store::Store`: The Store object to save.
 """
-function save_store(store::RAGStore)
-    dataset_filename = joinpath(store.cache_dir, "$(store.filename)_dataset.jld2")
-    testcase_filename = joinpath(store.cache_dir, "$(store.filename)_testcase.jld2")
+function save_store(filename::String, store::RAGStore)
+    dataset_filename = filename * "_dataset.jld2"
+    testcase_filename = filename * "_testcase.jld2"
     save_dataset_store(dataset_filename, store.dataset_store)
     save_testcase_store(testcase_filename, store.testcase_store)
 end
 
 """
-    load_store(filename::String, cache_dir::String) -> RAGStore
+    load_store(filename::String) -> RAGStore
 
 Load a RAGStore object from JLD2 files.
 
 # Arguments
 - `filename::String`: The base name of the files to load the store from.
-- `cache_dir::String`: The directory where cache files are stored.
 
 # Returns
 - `RAGStore`: The loaded RAGStore object.
 """
-function load_store(filename::String, cache_dir::String)
-    dataset_filename = joinpath(cache_dir, "$(filename)_dataset.jld2")
-    testcase_filename = joinpath(cache_dir, "$(filename)_testcase.jld2")
+function load_store(filename::String)
+    dataset_filename = filename * "_dataset.jld2"
+    testcase_filename = filename * "_testcase.jld2"
     dataset_store = load_dataset_store(dataset_filename)
     testcase_store = load_testcase_store(testcase_filename)
-    return RAGStore(filename, cache_dir, dataset_store, testcase_store)
+    return RAGStore(
+        dataset_store = dataset_store,
+        testcase_store = testcase_store,
+        cache_dir = dirname(filename)
+    )
 end
 
 # Helper function to ensure cache directory exists
@@ -132,5 +122,4 @@ function initialize_store(store::RAGStore)
     initialize_dataset_store(store.dataset_store)
     initialize_testcase_store(store.testcase_store)
 end
-
 

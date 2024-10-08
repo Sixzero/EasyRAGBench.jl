@@ -14,109 +14,12 @@ struct RefChunk <: AbstractChunkFormat
     source::String
 end
 
-# Generate an incremental ID
-mutable struct IDGenerator
-    counter::Int
-end
-
-const id_generator = IDGenerator(0)
-
-function generate_id()
-    id_generator.counter += 1
-    return "CC_$(id_generator.counter)"
-end
-
-# Initialize ID generator from existing collections
-function initialize_id_generator(collections::Dict{String, Dict{String, Union{String, RefChunk}}})
-    if !isempty(collections)
-        max_id = maximum(parse(Int, split(id, "_")[2]) for id in keys(collections))
-        id_generator.counter = max_id
-    end
-end
-
-# Generate a large, non-repetitive content
-function generate_large_content(size_kb::Int)
-    Random.seed!(42)
+# Generate a large, non-repetitive content (kept for testing purposes)
+function generate_large_content(size_kb::Int; seed=42)
+    Random.seed!(seed)
     chars = ['a':'z'..., 'A':'Z'..., '0':'9'..., ' ', '.', ',', '!', '?', '-', ':', ';', '(', ')', '\n']
     content = String(rand(chars, size_kb * 1024))
     return content
-end
-
-# Create collections
-function create_collections(source_chunks_list::Vector{Dict{String, String}}, compression::CompressionStrategy)
-    collections = Dict{String, Dict{String, Union{String, RefChunk}}}()
-    
-    for source_chunks in source_chunks_list
-        collection_id = generate_id()
-        collection = create_collection(source_chunks, compression, collection_id)
-        collections[collection_id] = collection
-    end
-    
-    return collections
-end
-
-# Create a single collection (dispatch on compression strategy)
-function create_collection(source_chunks::Dict{String, String}, ::NoCompression, collection_id::String)
-    return Dict(source => chunk for (source, chunk) in source_chunks)
-end
-
-function create_collection(source_chunks::Dict{String, String}, ::RefChunkCompression, collection_id::String)
-    collection = Dict{String, Union{String, RefChunk}}()
-    unique_chunks = Dict{String, Tuple{String, String}}()
-    
-    for (source, chunk) in source_chunks
-        found = false
-        for (existing_chunk, (existing_id, existing_source)) in unique_chunks
-            if existing_chunk == chunk
-                collection[source] = RefChunk(existing_id, existing_source)
-                found = true
-                break
-            end
-        end
-        
-        if !found
-            unique_chunks[chunk] = (collection_id, source)
-            collection[source] = chunk
-        end
-    end
-    
-    return collection
-end
-
-# Update collections
-function update_collections(collections::Dict{String, Dict{String, Union{String, RefChunk}}}, 
-                            source_chunks::Dict{String, String}, compression::CompressionStrategy)
-    for (source, chunk) in source_chunks
-        collection_id = generate_id()
-        
-        if compression isa RefChunkCompression
-            # Check if this chunk already exists in any collection
-            for (existing_id, existing_collection) in collections
-                for (existing_source, existing_chunk) in existing_collection
-                    if existing_chunk isa String && existing_chunk == chunk
-                        # If found, create a RefChunk
-                        collections[collection_id] = Dict(source => RefChunk(existing_id, existing_source))
-                        return
-                    end
-                end
-            end
-        end
-        
-        # If not found or not using RefChunks, add as a new chunk
-        collections[collection_id] = Dict(source => chunk)
-    end
-end
-
-# Reconstruct data from RefChunk (dispatch on chunk type)
-function reconstruct_data(collection::Dict{String, Union{String, RefChunk}}, source::String)
-    chunk = collection[source]
-    return reconstruct_data(chunk, collection)
-end
-
-reconstruct_data(chunk::String, _) = chunk
-
-function reconstruct_data(chunk::RefChunk, collection::Dict{String, Union{String, RefChunk}})
-    return reconstruct_data(collection, chunk.source)
 end
 
 # Utility functions for generating cache keys
@@ -145,3 +48,117 @@ function fast_cache_key(fn::Function, keys)
 
     return string(combined_hash, base=16, pad=16)
 end
+
+"""
+    compress(::RefChunkCompression, indexes::Dict, new_index::OrderedDict{String, String}) -> OrderedDict{String, Union{String, RefChunk}}
+
+Compress a new index against the existing indices using RefChunkCompression.
+This function checks for existing chunks across all stored indices and creates RefChunks where possible.
+
+# Arguments
+- `::RefChunkCompression`: The compression strategy (dispatch on this type)
+- `indexes::Dict`: The existing indexes
+- `new_index::OrderedDict{String, String}`: The new index to be compressed
+
+# Returns
+- `OrderedDict{String, Union{String, RefChunk}}`: The compressed index
+"""
+function compress(::RefChunkCompression, indexes::Dict, new_index::OrderedDict{String, String})
+    compressed_index = OrderedDict{String, Union{String, RefChunk}}()
+    
+    # Generate a cache key for the new index and check for existence!
+    new_index_key = fast_cache_key(new_index)
+    if haskey(indexes, new_index_key)
+        return indexes[new_index_key]
+    end
+    
+    for (source, chunk) in new_index
+        ref_found = false
+        
+        # Check all existing indices for matching chunks
+        for (existing_id, existing_index) in indexes
+            for (existing_source, existing_chunk) in existing_index
+                if existing_chunk isa String && existing_chunk == chunk
+                    # Create a RefChunk if a match is found
+                    compressed_index[source] = RefChunk(existing_id, existing_source)
+                    ref_found = true
+                    break
+                end
+            end
+            ref_found && break
+        end
+        
+        # If no matching chunk was found, store the original chunk
+        if !ref_found
+            compressed_index[source] = chunk
+        end
+    end
+    
+    return compressed_index
+end
+
+# Add a method for NoCompression as well for consistency
+function compress(::NoCompression, indexes::Dict, new_index::OrderedDict{String, String})
+    return new_index
+end
+
+"""
+    decompress(::NoCompression, index::OrderedDict{String, Union{String, AbstractChunkFormat}}, all_indexes::Dict{String, OrderedDict{String, Union{String, AbstractChunkFormat}}})
+
+Decompress an index when no compression is used (identity operation).
+
+# Arguments
+- `::NoCompression`: The compression strategy (no compression).
+- `index::OrderedDict{String, Union{String, AbstractChunkFormat}}`: The index to decompress.
+- `all_indexes::Dict{String, OrderedDict{String, Union{String, AbstractChunkFormat}}}`: All stored indexes (not used for NoCompression).
+
+# Returns
+- `OrderedDict{String, String}`: The decompressed index (identical to input for NoCompression).
+"""
+function decompress(::NoCompression, index::OrderedDict{String, Union{String, T}}, all_indexes::Dict{String, OrderedDict{String, Union{String, T}}}) where T <: AbstractChunkFormat
+    return OrderedDict{String, String}(source => chunk for (source, chunk) in index)
+end
+
+"""
+    decompress(::RefChunkCompression, index::OrderedDict{String, Union{String, AbstractChunkFormat}}, all_indexes::Dict{String, OrderedDict{String, Union{String, AbstractChunkFormat}}})
+
+Decompress an index using RefChunkCompression, resolving all RefChunks to their original content.
+
+# Arguments
+- `::RefChunkCompression`: The compression strategy (RefChunkCompression).
+- `index::OrderedDict{String, Union{String, AbstractChunkFormat}}`: The index to decompress.
+- `all_indexes::Dict{String, OrderedDict{String, Union{String, AbstractChunkFormat}}}`: All stored indexes for resolving RefChunks.
+
+# Returns
+- `OrderedDict{String, String}`: The fully decompressed index.
+"""
+function decompress(::RefChunkCompression, index::OrderedDict{String, Union{String, T}}, all_indexes::Dict{String, OrderedDict{String, Union{String, T}}}) where {T <: AbstractChunkFormat}
+    decompressed = OrderedDict{String, String}()
+    for (source, chunk) in index
+        decompressed[source] = decompress_chunk(chunk, all_indexes)
+    end
+    return decompressed
+end
+
+"""
+    decompress_chunk(chunk::Union{String, RefChunk}, all_indexes::Dict{String, OrderedDict{String, Union{String, AbstractChunkFormat}}})
+
+Decompress a single chunk, handling both raw strings and RefChunks.
+
+# Arguments
+- `chunk::Union{String, RefChunk}`: The chunk to decompress.
+- `all_indexes::Dict{String, OrderedDict{String, Union{String, AbstractChunkFormat}}}`: All stored indexes for resolving RefChunks.
+
+# Returns
+- `String`: The decompressed content.
+"""
+function decompress_chunk(chunk::String, all_indexes::Dict{String, OrderedDict{String, Union{String, T}}}) where T <: AbstractChunkFormat
+    return chunk
+end
+
+function decompress_chunk(chunk::RefChunk, all_indexes::Dict{String, OrderedDict{String, Union{String, T}}}) where T <: AbstractChunkFormat
+    referenced_index = all_indexes[chunk.collection_id]
+    referenced_chunk = referenced_index[chunk.source]
+    return decompress_chunk(referenced_chunk, all_indexes)
+end
+

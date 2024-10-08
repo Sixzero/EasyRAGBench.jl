@@ -27,11 +27,11 @@ Append a new question/test case to the TestcaseStore.
 # Returns
 - `Nothing`
 """
-function Base.append!(store::TestcaseStore, index_id::String, question::NamedTuple; metadata::Dict{String, Any} = Dict())
+function Base.append!(store::TestcaseStore, index_id::String, question::NamedTuple)
     if !haskey(store.questions, index_id)
         store.questions[index_id] = NamedTuple[]
     end
-    push!(store.questions[index_id], merge(question, (metadata=metadata,)))
+    push!(store.questions[index_id], question)
     
     save_testcase_store(joinpath(store.cache_dir, "testcase_store.jld2"), store)
 end
