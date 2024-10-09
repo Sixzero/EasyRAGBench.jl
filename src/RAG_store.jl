@@ -28,7 +28,7 @@ function RAGStore(filename::String, cache_dir::String = joinpath(dirname(@__DIR_
     testcase_file = joinpath(cache_dir, "$(filename)_testcase.jld2")
     
     if isfile(dataset_file) && isfile(testcase_file)
-        return load_store(joinpath(cache_dir, filename))
+        return load_store(cache_dir, filename)
     end
     return RAGStore(filename, cache_dir, DatasetStore(), TestcaseStore())
 end
@@ -102,7 +102,7 @@ function save_store(store::RAGStore)
 end
 
 """
-    load_store(filename::String, cache_dir::String) -> RAGStore
+    load_store(cache_dir::String, filename::String) -> RAGStore
 
 Load a RAGStore object from JLD2 files.
 
@@ -113,7 +113,7 @@ Load a RAGStore object from JLD2 files.
 # Returns
 - `RAGStore`: The loaded RAGStore object.
 """
-function load_store(filename::String, cache_dir::String)
+function load_store(cache_dir::String, filename::String)
     dataset_filename = joinpath(cache_dir, "$(filename)_dataset.jld2")
     testcase_filename = joinpath(cache_dir, "$(filename)_testcase.jld2")
     dataset_store = load_dataset_store(dataset_filename)
