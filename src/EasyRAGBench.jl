@@ -1,7 +1,6 @@
 module EasyRAGBench
-using OrderedCollections
 
-include("compression.jl")
-include("RAG_store.jl")
+include("GenSolutions.jl")
+include("ManualSolutionEdit.jl")
 
 end # module EasyRAGBench
