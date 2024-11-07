@@ -1,6 +1,7 @@
 using JLD2
 using OrderedCollections
 using Dates
+using Base.Threads: ReentrantLock, @spawn
 
 """
 SolutionStore Structure:
@@ -12,43 +13,93 @@ SolutionStore Structure:
     config2_unique_id: {...},
 },
 index2_id: {...}}
-
-Additional fields may be added as needed for specific use cases.
 """
 struct SolutionStore
     filename::String
     data::Dict{String, Dict{String, Dict{String, Any}}}
+    lock::ReentrantLock
 
     function SolutionStore(filename::String)
         full_path = joinpath(dirname(@__DIR__), "solution", filename)
         data = isfile(full_path) ? load_solutions(full_path) : Dict{String, Dict{String, Dict{String, Any}}}()
-        new(full_path, data)
+        new(full_path, data, ReentrantLock())
     end
 end
 
 function load_solutions(filename::String)
-    JLD2.@load filename solutions
-    return solutions
+    jldopen(filename, "r") do file
+        if !haskey(file, "solutions")
+            return Dict{String, Dict{String, Dict{String, Any}}}()
+        end
+        solutions = Dict{String, Dict{String, Dict{String, Any}}}()
+        solutions_group = file["solutions"]
+        
+        for index_id in keys(solutions_group)
+            solutions[index_id] = Dict{String, Dict{String, Any}}()
+            for config_id in keys(solutions_group[index_id])
+                solutions[index_id][config_id] = solutions_group[index_id][config_id]
+            end
+        end
+        return solutions
+    end
 end
 
 function save_solutions(store::SolutionStore)
-    temp_file = store.filename * ".temp"
-    solutions = store.data
-    JLD2.@save temp_file solutions
-    mv(temp_file, store.filename, force=true)
+    lock(store.lock) do
+        temp_file = store.filename * ".temp"
+        solutions = store.data
+        JLD2.jldsave(temp_file; solutions)
+        mv(temp_file, store.filename, force=true)
+    end
 end
 
 function add_solutions!(store::SolutionStore, index_id::String, config_id::String, solutions::OrderedDict{String, Vector{String}}, metadata::Dict)
+    # Check if solution already exists
+    if haskey(store.data, index_id) && 
+       haskey(store.data[index_id], config_id) &&
+       store.data[index_id][config_id]["solutions"] == solutions
+        return  # Skip if identical solution already exists
+    end
+    
+    # Append new solutions - creates or updates specific entry
     if !haskey(store.data, index_id)
         store.data[index_id] = Dict{String, Dict{String, Any}}()
     end
     
-    store.data[index_id][config_id] = Dict{String, Any}(
+    data = Dict{String, Any}(
         "solutions" => solutions,
         "metadata" => metadata
     )
+    store.data[index_id][config_id] = data
     
-    save_solutions(store)
+    lock(store.lock) do
+        # Update just the specific section in the file
+        if !isfile(store.filename)
+            jldopen(store.filename, "w+", compress=false) do file
+                JLD2.Group(file, "solutions")
+            end
+        end
+        
+        jldopen(store.filename, "r+") do file
+            solutions_group = if !haskey(file, "solutions")
+                JLD2.Group(file, "solutions")
+            else
+                file["solutions"]
+            end
+            
+            index_group = if !haskey(solutions_group, index_id)
+                JLD2.Group(solutions_group, index_id)
+            else
+                solutions_group[index_id]
+            end
+            
+            # Direct update of the config data
+            if haskey(index_group, config_id)
+                delete!(index_group, config_id)
+            end
+            index_group[config_id] = data
+        end
+    end
 end
 
 function get_solutions(store::SolutionStore, index_id::String, config_id::String)

@@ -13,7 +13,7 @@ function generate_solution(store::RAGStore, index_id::String, config::AbstractRA
     ordered_dict = EasyRAGStore.get_index(store, index_id)
     questions = get_questions(store, index_id)
     
-    embedding_search_reranker = EmbeddingSearchReranker(config, ordered_dict)
+    filterer = get_filterer(config, ordered_dict)
 
     solutions = OrderedDict{String, Vector{String}}()
 
@@ -21,7 +21,7 @@ function generate_solution(store::RAGStore, index_id::String, config::AbstractRA
         if haskey(existing_solutions, question.question)
             solutions[question.question] = existing_solutions[question.question]
         else
-            filtered_results = embedding_search_reranker(question.question)
+            filtered_results = filterer(question.question)
             solutions[question.question] = collect(keys(filtered_results))
         end
     end
@@ -37,24 +37,25 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
     
     progress = Progress(total_indices, desc="Generating solutions: ", showspeed=true)
 
-    for (i, index_id) in enumerate(index_ids)
-        for config in configs
+    ntasks = Threads.nthreads()
+    # ntasks = 1
+    asyncmap(enumerate(index_ids); ntasks) do (i, index_id)
+        for (j, config) in enumerate(configs)
+            @show config
             config_id = get_unique_id(config)
             existing_solutions = get_solutions(solution_store, index_id, config_id)
             solutions = generate_solution(store, index_id, config, existing_solutions)
             
             # Add new solutions to the SolutionStore
-            metadata = Dict(
-                "timestamp" => Dates.now(),
-                "config" => config
-            )
+            metadata = Dict("timestamp" => Dates.now(), "config" => config)
             add_solutions!(solution_store, index_id, config_id, solutions, metadata)
+            
+            println("  Completed config $j/$(length(configs)) for index $index_id")
         end
         
         next!(progress; showvalues = [(:index, "$i/$total_indices"), (:current_id, index_id)])
+        println()
     end
-    
-    save_solutions(solution_store)
     
     @info "Generated and saved all solutions to $(solution_store.filename)"
     @info "Total indices processed: $total_indices"

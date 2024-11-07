@@ -1,114 +1,140 @@
 using EasyContext
 using EasyRAGStore
-using PromptingTools
-using PromptingTools.Experimental.RAGTools
-using OrderedCollections
-using JLD2
-using EasyContext: get_index
-using EasyRAGStore: get_questions
 using Statistics
-using Dates
-using SHA
+using OrderedCollections
 
 
+export RelevanceMetrics, evaluate_relevance, summarize
+export compare_solutions, compare_solutions_to_reference
+export run_benchmark_comparison
 
-function evaluate_relevance(filtered_results, reference_solution)
-    new_solution_sources = Set(filtered_results)
-    reference_sources = Set(reference_solution)
-    
-    true_positives = length(intersect(new_solution_sources, reference_sources))
-    false_positives = length(setdiff(new_solution_sources, reference_sources))
-    false_negatives = length(setdiff(reference_sources, new_solution_sources))
-    
-    recall = length(reference_sources) > 0 ? true_positives / length(reference_sources) : 0.0
-    precision = length(new_solution_sources) > 0 ? true_positives / length(new_solution_sources) : 0.0
-    f1_score = (precision + recall > 0) ? 2 * (precision * recall) / (precision + recall) : 0.0
-    
-    return (
-        recall = recall,
-        precision = precision,
-        f1_score = f1_score,
-        true_positives = true_positives,
-        false_positives = false_positives,
-        false_negatives = false_negatives
-    )
-end
-
-function compare_solutions(solution_store::SolutionStore, index_id::String, config1_id::String, config2_id::String)
-    if !haskey(solution_store.data, index_id) || 
-       !haskey(solution_store.data[index_id], config1_id) || 
-       !haskey(solution_store.data[index_id], config2_id)
-        error("Invalid index_id or config_ids")
-    end
-
-    solutions1 = solution_store.data[index_id][config1_id]["solutions"]
-    solutions2 = solution_store.data[index_id][config2_id]["solutions"]
-
-    metrics = []
-
-    for (question, filtered_sources1) in solutions1
-        if !haskey(solutions2, question)
-            error("Questions do not match between configurations")
-        end
-        filtered_sources2 = solutions2[question]
-
-        relevance_scores = evaluate_relevance(filtered_sources1, filtered_sources2)
-        push!(metrics, relevance_scores)
-    end
-
-    avg_metrics = (
-        recall = mean(m.recall for m in metrics),
-        precision = mean(m.precision for m in metrics),
-        f1_score = mean(m.f1_score for m in metrics),
-        true_positives = sum(m.true_positives for m in metrics),
-        false_positives = sum(m.false_positives for m in metrics),
-        false_negatives = sum(m.false_negatives for m in metrics)
-    )
-
-    return avg_metrics
-end
-
-function compare_all_configs(solution_store::SolutionStore)
-    results = Dict()
-    
+function findfirst(solution_store::SolutionStore, config_id::String)
     for (index_id, index_data) in solution_store.data
-        results[index_id] = Dict()
-        config_ids = collect(keys(index_data))
-        
-        for i in 1:length(config_ids)
-            for j in (i+1):length(config_ids)
-                config1_id = config_ids[i]
-                config2_id = config_ids[j]
-                
-                comparison_result = compare_solutions(solution_store, index_id, config1_id, config2_id)
-                results[index_id]["$(config1_id)_vs_$(config2_id)"] = comparison_result
-            end
+        if haskey(index_data, config_id)
+            return index_data[config_id]["metadata"]["config"]
         end
     end
+    nothing
+end
+
+function collect_comparisons(index_data, reference_config_id::String)
+    results = Dict()
+    ref_config = index_data[reference_config_id]["metadata"]["config"]
+    
+    for (config_id, config_data) in index_data
+        config_id == reference_config_id && continue
+        
+        metrics = compare_solutions_to_reference(index_data, reference_config_id, config_id)
+        isnothing(metrics) && continue
+        
+        config = config_data["metadata"]["config"]
+        results["$reference_config_id vs $config_id"] = (
+            metrics=metrics,
+            ref_config=ref_config,
+            config=config
+        )
+    end
+    results
+end
+
+function calculate_mean_scores(comparison_results)
+    mean_scores = Dict()
+    
+    for (index_id, index_comparisons) in comparison_results
+        mean_scores[index_id] = Dict()
+        for (comparison, result) in index_comparisons
+            mean_scores[index_id][comparison] = (
+                f1_score = result.metrics.f1_score,
+                recall = result.metrics.recall,
+                precision = result.metrics.precision,
+                ref_config = result.ref_config,
+                config = result.config
+            )
+        end
+    end
+    mean_scores
+end
+
+function calculate_config_overall_scores(mean_scores)
+    scores_by_comparison = Dict()
+    
+    for (_, index_comparisons) in mean_scores
+        for (comparison, result) in index_comparisons
+            if !haskey(scores_by_comparison, comparison)
+                scores_by_comparison[comparison] = Dict(
+                    :f1_score => [], :recall => [], :precision => [],
+                    :ref_config => result.ref_config,
+                    :config => result.config
+                )
+            end
+            push!(scores_by_comparison[comparison][:f1_score], result.f1_score)
+            push!(scores_by_comparison[comparison][:recall], result.recall)
+            push!(scores_by_comparison[comparison][:precision], result.precision)
+        end
+    end
+    
+    config_overall_scores = Dict()
+    for (comparison, scores) in scores_by_comparison
+        config_overall_scores[comparison] = Dict()
+        for metric in [:f1_score, :recall, :precision]
+            config_overall_scores[comparison][metric] = mean(scores[metric])
+        end
+        config_overall_scores[comparison][:ref_config] = scores[:ref_config]
+        config_overall_scores[comparison][:config] = scores[:config]
+    end
+    
+    config_overall_scores
+end
+
+function calculate_overall_mean_scores(mean_scores, reference_config)
+    scores = Dict()
+    for metric in [:f1_score, :recall, :precision]
+        scores[metric] = mean(
+            result[metric]
+            for (_, index_comparisons) in mean_scores
+            for (comparison, result) in index_comparisons
+        )
+    end
+    scores[:ref_config] = reference_config
+    scores
+end
+
+function benchmark_against_reference(solution_store::SolutionStore, reference_config_id::String)
+    comparison_results = Dict()
+    
+    # Get reference config
+    reference_config = findfirst(solution_store, reference_config_id)
+    isnothing(reference_config) && @warn("Reference config not found: $reference_config_id") 
+    
+    # Collect comparisons
+    for (index_id, index_data) in solution_store.data
+        comparison_results[index_id] = collect_comparisons(index_data, reference_config_id)
+        isempty(comparison_results[index_id]) && delete!(comparison_results, index_id)
+    end
+
+    # Calculate scores
+    mean_scores = calculate_mean_scores(comparison_results)
+    config_overall_scores = calculate_config_overall_scores(mean_scores)
+    overall_mean_scores = calculate_overall_mean_scores(mean_scores, reference_config)
+    
+    return (;
+        comparison_results,
+        mean_scores,
+        config_overall_scores,
+        overall_mean_scores
+    )
+end
+
+function run_benchmark_comparison(solution_file::String, reference_config_id::String, output_dir="benchmark_results")
+    solution_store = SolutionStore(solution_file)
+    results = benchmark_against_reference(solution_store, reference_config_id)
+    
+    generate_benchmark_plots(
+        results.mean_scores,
+        results.config_overall_scores,
+        results.overall_mean_scores,
+        output_dir
+    )
     
     return results
-end
-
-function print_comparison_results(comparison_results)
-    for (index_id, index_comparisons) in comparison_results
-        println("Index: $index_id")
-        for (comparison, metrics) in index_comparisons
-            println("  Comparison: $comparison")
-            println("    Recall: $(round(metrics.recall, digits=3))")
-            println("    Precision: $(round(metrics.precision, digits=3))")
-            println("    F1 Score: $(round(metrics.f1_score, digits=3))")
-            println("    True Positives: $(metrics.true_positives)")
-            println("    False Positives: $(metrics.false_positives)")
-            println("    False Negatives: $(metrics.false_negatives)")
-        end
-        println()
-    end
-end
-
-# Example usage
-function run_benchmarks(solution_file::String)
-    solution_store = SolutionStore(solution_file)
-    comparison_results = compare_all_configs(solution_store)
-    print_comparison_results(comparison_results)
-    return comparison_results
 end
