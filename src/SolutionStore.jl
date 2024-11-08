@@ -80,7 +80,7 @@ function add_solutions!(store::SolutionStore, index_id::String, config_id::Strin
             end
         end
         
-        jldopen(store.filename, "r+") do file
+        jldopen(store.filename, "a+") do file
             solutions_group = if !haskey(file, "solutions")
                 JLD2.Group(file, "solutions")
             else

@@ -1,59 +1,37 @@
-
-using EasyRAGBench: run_generation, run_benchmarks, EmbeddingSearchRerankerConfig
+using EasyRAGBench: run_generation, run_benchmark_comparison
 using EasyRAGStore: RAGStore
+using EasyRAGBench: EmbeddingSearchConfig, JinaEmbeddingSearchConfig, VoyageEmbeddingSearchConfig, OpenAIEmbeddingSearchConfig, EmbeddingSearchRerankerConfig
 
-# Define configurations
+# Define configurations to test
 configs = [
-    EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=120, batch_size=50, reranker_model="gpt4om", top_n=10),
+    # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=120, batch_size=60, reranker_model="claude", top_n=10),
+    # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=120, batch_size=60, reranker_model="gpt4om", top_n=10),
+    # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=120, batch_size=50, reranker_model="gpt4om", top_n=10),
     EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=40, batch_size=50, reranker_model="gpt4om", top_n=10),
+    # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=40, batch_size=50, reranker_model="orgf", top_n=10),
+    # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=120, batch_size=60, reranker_model="claudeh", top_n=10),
+    # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=40, batch_size=50, reranker_model="claudeh", top_n=10),
+    # EmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=40),
+    # EmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=10),
+    JinaEmbeddingSearchConfig(embedding_model="jina-embeddings-v2-base-code", top_k=40),
+    JinaEmbeddingSearchConfig(embedding_model="jina-embeddings-v2-base-code", top_k=10),
+    VoyageEmbeddingSearchConfig(embedding_model="voyage-code-2", top_k=40),
+    VoyageEmbeddingSearchConfig(embedding_model="voyage-code-2", top_k=10),
+    OpenAIEmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=40),
+    OpenAIEmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=10),
 ]
 
 # Define RAG dataset name and solution file
 rag_dataset_name = "workspace_context_log"
-solution_file = "all_solutions.jld2"
+solution_file = "all_sols.jld2"
 
-# Run generation
-solution_store = run_generation(rag_dataset_name, solution_file, configs)
+ ## %% 1. Generate solutions for all configurations
+@time solution_store = run_generation(rag_dataset_name, solution_file, configs);
 
-# Run benchmarks
-comparison_results = run_benchmarks(solution_file)
-
-# Print comparison results
-for (index_id, index_comparisons) in comparison_results
-    println("Index: $index_id")
-    for (comparison, metrics) in index_comparisons
-        println("  Comparison: $comparison")
-        println("    Recall: $(round(metrics.recall, digits=3))")
-        println("    Precision: $(round(metrics.precision, digits=3))")
-        println("    F1 Score: $(round(metrics.f1_score, digits=3))")
-        println("    True Positives: $(metrics.true_positives)")
-        println("    False Positives: $(metrics.false_positives)")
-        println("    False Negatives: $(metrics.false_negatives)")
-    end
-    println()
-end
-#%%
+#%% 2. Run benchmark comparison against the first config as reference
 import EasyRAGBench
-# If you want to access specific results
-index_id = first(keys(solution_store.data))
-config_id1 = EasyRAGBench.get_unique_id(configs[1])
-config_id2 = EasyRAGBench.get_unique_id(configs[2])
+reference_config = EasyRAGBench.get_unique_id(configs[1])
+results = run_benchmark_comparison(solution_file, reference_config, "benchmark_results")
+;
+#%% 3. Print overall scores
 
-if haskey(comparison_results, index_id) && haskey(comparison_results[index_id], "$(config_id1)_vs_$(config_id2)")
-    specific_comparison = comparison_results[index_id]["$(config_id1)_vs_$(config_id2)"]
-    println("Specific comparison between configs 1 and 2 for index $index_id:")
-    println("  Recall: $(round(specific_comparison.recall, digits=3))")
-    println("  Precision: $(round(specific_comparison.precision, digits=3))")
-    println("  F1 Score: $(round(specific_comparison.f1_score, digits=3))")
-end
-
-# Print all solutions for a specific index and config
-for (config_id, config_data) in solution_store.data[index_id]
-    println("Config: ", config_id)
-    # println("Configuration: ", config_data["config"])
-    for (question, filtered_sources) in config_data["solutions"]
-        println("  Question: ", question)
-        println("  Filtered sources: ", filtered_sources)
-    end
-    println()
-end
