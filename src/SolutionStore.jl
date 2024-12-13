@@ -14,14 +14,21 @@ SolutionStore Structure:
 },
 index2_id: {...}}
 """
+struct SolutionResult
+    solutions::OrderedDict{String,Vector{String}}
+    timings::OrderedDict{String,Float64}
+    timestamp::DateTime
+    metadata::Dict{String,Any}
+end
+
 struct SolutionStore
     filename::String
-    data::Dict{String, Dict{String, Dict{String, Any}}}
+    data::Dict{String, Dict{String, SolutionResult}}  # Changed type to use SolutionResult
     lock::ReentrantLock
 
     function SolutionStore(filename::String)
         full_path = joinpath(dirname(@__DIR__), "solution", filename)
-        data = isfile(full_path) ? load_solutions(full_path) : Dict{String, Dict{String, Dict{String, Any}}}()
+        data = isfile(full_path) ? load_solutions(full_path) : Dict{String, Dict{String, SolutionResult}}()
         new(full_path, data, ReentrantLock())
     end
 end
@@ -29,15 +36,26 @@ end
 function load_solutions(filename::String)
     jldopen(filename, "r") do file
         if !haskey(file, "solutions")
-            return Dict{String, Dict{String, Dict{String, Any}}}()
+            return Dict{String, Dict{String, SolutionResult}}()
         end
-        solutions = Dict{String, Dict{String, Dict{String, Any}}}()
+        solutions = Dict{String, Dict{String, SolutionResult}}()
         solutions_group = file["solutions"]
         
         for index_id in keys(solutions_group)
-            solutions[index_id] = Dict{String, Dict{String, Any}}()
+            solutions[index_id] = Dict{String, SolutionResult}()
             for config_id in keys(solutions_group[index_id])
-                solutions[index_id][config_id] = solutions_group[index_id][config_id]
+                data = solutions_group[index_id][config_id]
+                # Convert old format to SolutionResult if needed
+                solutions[index_id][config_id] = if data isa SolutionResult
+                    data
+                else
+                    SolutionResult(
+                        solutions = data["solutions"],
+                        timings = get(data["metadata"], "timings", OrderedDict{String,Float64}()),
+                        timestamp = get(data["metadata"], "timestamp", now()),
+                        metadata = data["metadata"]
+                    )
+                end
             end
         end
         return solutions
@@ -53,24 +71,20 @@ function save_solutions(store::SolutionStore)
     end
 end
 
-function add_solutions!(store::SolutionStore, index_id::String, config_id::String, solutions::OrderedDict{String, Vector{String}}, metadata::Dict)
+function add_solutions!(store::SolutionStore, index_id::String, config_id::String, result::SolutionResult)
     # Check if solution already exists
     if haskey(store.data, index_id) && 
        haskey(store.data[index_id], config_id) &&
-       store.data[index_id][config_id]["solutions"] == solutions
+       store.data[index_id][config_id].solutions == result.solutions
         return  # Skip if identical solution already exists
     end
     
     # Append new solutions - creates or updates specific entry
     if !haskey(store.data, index_id)
-        store.data[index_id] = Dict{String, Dict{String, Any}}()
+        store.data[index_id] = Dict{String, SolutionResult}()
     end
     
-    data = Dict{String, Any}(
-        "solutions" => solutions,
-        "metadata" => metadata
-    )
-    store.data[index_id][config_id] = data
+    store.data[index_id][config_id] = result
     
     lock(store.lock) do
         # Update just the specific section in the file
@@ -97,14 +111,14 @@ function add_solutions!(store::SolutionStore, index_id::String, config_id::Strin
             if haskey(index_group, config_id)
                 delete!(index_group, config_id)
             end
-            index_group[config_id] = data
+            index_group[config_id] = result
         end
     end
 end
 
 function get_solutions(store::SolutionStore, index_id::String, config_id::String)
     if haskey(store.data, index_id) && haskey(store.data[index_id], config_id)
-        return store.data[index_id][config_id]["solutions"]
+        return store.data[index_id][config_id].solutions
     else
         return OrderedDict{String, Vector{String}}()
     end
@@ -117,14 +131,14 @@ end
 
 function get_config(store::SolutionStore, index_id::String, config_id::String)
     if haskey(store.data, index_id) && haskey(store.data[index_id], config_id)
-        return store.data[index_id][config_id]["metadata"]["config"]
+        return store.data[index_id][config_id].metadata["config"]
     end
     return nothing
 end
 
 function get_all_solutions(store::SolutionStore, index_id::String)
     if haskey(store.data, index_id)
-        return Dict(config_id => data["solutions"] for (config_id, data) in store.data[index_id])
+        return Dict(config_id => result.solutions for (config_id, result) in store.data[index_id])
     else
         return Dict{String, OrderedDict{String, Vector{String}}}()
     end

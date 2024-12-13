@@ -13,8 +13,10 @@ configs = [
     # EmbeddingSearchRerankerConfig(embedding_model="voyage-code-2", top_k=40, batch_size=50, reranker_model="claudeh", top_n=10),
     # EmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=40),
     # EmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=10),
+    JinaEmbeddingSearchConfig(embedding_model="jina-embeddings-v3", top_k=40),
     JinaEmbeddingSearchConfig(embedding_model="jina-embeddings-v2-base-code", top_k=40),
     JinaEmbeddingSearchConfig(embedding_model="jina-embeddings-v2-base-code", top_k=10),
+    VoyageEmbeddingSearchConfig(embedding_model="voyage-3", top_k=40),
     VoyageEmbeddingSearchConfig(embedding_model="voyage-code-2", top_k=40),
     VoyageEmbeddingSearchConfig(embedding_model="voyage-code-2", top_k=10),
     OpenAIEmbeddingSearchConfig(embedding_model="text-embedding-3-small", top_k=40),
@@ -23,7 +25,7 @@ configs = [
 
 # Define RAG dataset name and solution file
 rag_dataset_name = "workspace_context_log"
-solution_file = "all_sols.jld2"
+solution_file = "all_sols2.jld2"
 
  ## %% 1. Generate solutions for all configurations
 @time solution_store = run_generation(rag_dataset_name, solution_file, configs);

@@ -8,28 +8,36 @@ using EasyContext: get_index
 using EasyRAGStore: get_questions
 using ProgressMeter
 using Dates
+using EasyRAGStore: ensure_loaded!
 
 function generate_solution(store::RAGStore, index_id::String, config::AbstractRAGPipeConfig, existing_solutions::OrderedDict{String, Vector{String}})
     ordered_dict = EasyRAGStore.get_index(store, index_id)
     questions = get_questions(store, index_id)
-    
+
     filterer = get_filterer(config, ordered_dict)
 
     solutions = OrderedDict{String, Vector{String}}()
+    timings = OrderedDict{String, Float64}()
 
     for question in questions
         if haskey(existing_solutions, question.question)
             solutions[question.question] = existing_solutions[question.question]
         else
-            filtered_results = filterer(question.question)
-            solutions[question.question] = collect(keys(filtered_results))
+            time_taken = @elapsed begin
+                filtered_results = filterer(question.question)
+                solutions[question.question] = collect(keys(filtered_results))
+            end
+            timings[question.question] = time_taken
         end
     end
-    
-    return solutions
+
+    metadata = Dict{String,Any}("config" => config)
+    current_time = now()
+    return SolutionResult(solutions, timings, current_time, metadata)
 end
 
 function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, configs::Vector{<:AbstractRAGPipeConfig})
+    ensure_loaded!(store)
     index_ids = collect(keys(store.dataset_store.indexes))
     total_indices = length(index_ids)
     
@@ -44,11 +52,8 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
             @show config
             config_id = get_unique_id(config)
             existing_solutions = get_solutions(solution_store, index_id, config_id)
-            solutions = generate_solution(store, index_id, config, existing_solutions)
-            
-            # Add new solutions to the SolutionStore
-            metadata = Dict("timestamp" => Dates.now(), "config" => config)
-            add_solutions!(solution_store, index_id, config_id, solutions, metadata)
+            result = generate_solution(store, index_id, config, existing_solutions)
+            add_solutions!(solution_store, index_id, config_id, result)
             
             println("  Completed config $j/$(length(configs)) for index $index_id")
         end
