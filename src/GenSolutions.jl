@@ -4,17 +4,16 @@ using PromptingTools
 using PromptingTools.Experimental.RAGTools
 using OrderedCollections
 using JLD2
-using EasyContext: get_index
+using EasyContext: search, AbstractRAGConfig, get_source
 using EasyRAGStore: get_questions
 using ProgressMeter
 using Dates
 using EasyRAGStore: ensure_loaded!
 
-function generate_solution(store::RAGStore, index_id::String, config::AbstractRAGPipeConfig, existing_solutions::OrderedDict{String, Vector{String}})
-    ordered_dict = EasyRAGStore.get_index(store, index_id)
-    questions = get_questions(store, index_id)
 
-    filterer = get_filterer(config, ordered_dict)
+function generate_solution(store::RAGStore, index_id::String, config::AbstractRAGConfig, existing_solutions::OrderedDict{String, Vector{String}})
+    chunks = EasyRAGStore.get_index(store, index_id)
+    questions = get_questions(store, index_id)
 
     solutions = OrderedDict{String, Vector{String}}()
     timings = OrderedDict{String, Float64}()
@@ -24,8 +23,8 @@ function generate_solution(store::RAGStore, index_id::String, config::AbstractRA
             solutions[question.question] = existing_solutions[question.question]
         else
             time_taken = @elapsed begin
-                filtered_results = filterer(question.question)
-                solutions[question.question] = collect(keys(filtered_results))
+                filtered_results = search(config, chunks, question.question)
+                solutions[question.question] = get_source.(filtered_results)
             end
             timings[question.question] = time_taken
         end
@@ -36,9 +35,9 @@ function generate_solution(store::RAGStore, index_id::String, config::AbstractRA
     return SolutionResult(solutions, timings, current_time, metadata)
 end
 
-function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, configs::Vector{<:AbstractRAGPipeConfig})
+function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, configs::Vector{<:AbstractRAGConfig})
     ensure_loaded!(store)
-    index_ids = collect(keys(store.dataset_store.indexes))
+    index_ids = collect(keys(store.dataset_store.chunks))
     total_indices = length(index_ids)
     
     @info "Starting to generate solutions for $total_indices indices"
@@ -46,11 +45,12 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
     progress = Progress(total_indices, desc="Generating solutions: ", showspeed=true)
 
     ntasks = Threads.nthreads()
+    ntasks = 8
     # ntasks = 1
-    asyncmap(enumerate(index_ids); ntasks) do (i, index_id)
+    map(enumerate(index_ids)) do (i, index_id)
         for (j, config) in enumerate(configs)
             @show config
-            config_id = get_unique_id(config)
+            config_id = humanize(config)
             existing_solutions = get_solutions(solution_store, index_id, config_id)
             result = generate_solution(store, index_id, config, existing_solutions)
             add_solutions!(solution_store, index_id, config_id, result)
@@ -67,7 +67,7 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
 end
 
 # Example usage
-function run_generation(rag_dataset_name::String, solution_file::String, configs::Vector{<:AbstractRAGPipeConfig})
+function run_generation(rag_dataset_name::String, solution_file::String, configs::Vector{<:AbstractRAGConfig})
     rag_store = RAGStore(rag_dataset_name)
     solution_store = SolutionStore(solution_file)
     
