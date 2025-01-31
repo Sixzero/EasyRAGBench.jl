@@ -1,7 +1,5 @@
 using Plots
-using StatsPlots
-using Statistics
-using Measures
+using StatsPlots  # This provides groupedbar
 
 function plot_overall_mean_scores(overall_mean_scores, output_dir=".")
     metrics = [:f1_score, :recall, :precision]
@@ -34,10 +32,10 @@ function plot_config_scores(config_overall_scores, output_dir=".")
     
     # Get reference config directly
     ref_config = config_overall_scores[first(comparisons)][:ref_config]
-    ref_name = humanize_config(ref_config)
+    ref_name = humanize(ref_config)
     
     # Get config names for x-axis labels
-    config_names = [humanize_config(scores[:config]) 
+    config_names = [humanize(scores[:config]) 
                    for (_, scores) in config_overall_scores]
     
     for (metric_key, metric_name) in metrics
@@ -71,8 +69,8 @@ function plot_comparison(mean_scores, metric, output_dir=".")
     for (_, scores) in mean_scores
         for (comparison, score) in scores
             push!(all_comparisons, comparison)
-            config_names[comparison] = humanize_config(score.config)  # Changed from config_name to config
-            ref_name = humanize_config(score.ref_config)             # Changed to use ref_config directly
+            config_names[comparison] = humanize(score.config)  # Changed from config_name to config
+            ref_name = humanize(score.ref_config)             # Changed to use ref_config directly
         end
     end
     comparisons = collect(all_comparisons)
@@ -110,7 +108,7 @@ function generate_benchmark_plots(mean_scores, config_overall_scores, overall_me
     # plot_overall_mean_scores(overall_mean_scores, output_dir)
     plot_config_scores(config_overall_scores, output_dir)
     
-    # for metric in [:f1_score, :recall, :precision]
-    #     plot_comparison(mean_scores, metric, output_dir)
-    # end
+    for metric in [:f1_score, :recall, :precision]
+        plot_comparison(mean_scores, metric, output_dir)
+    end
 end

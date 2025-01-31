@@ -19,13 +19,13 @@ function compare_solutions(solution_store::SolutionStore, index_id::String, conf
     summarize(metrics)
 end
 
-function compare_solutions_to_reference(index_data::Dict{String, Dict{String, Any}}, reference_config_id::String, config_id::String)::Union{RelevanceMetrics, Nothing}
+function compare_solutions_to_reference(index_data::Dict{String, SolutionResult}, reference_config_id::String, config_id::String)::Union{RelevanceMetrics, Nothing}
     if !haskey(index_data, reference_config_id) || !haskey(index_data, config_id)
         return nothing
     end
 
-    reference_solutions = index_data[reference_config_id]["solutions"]
-    solutions = index_data[config_id]["solutions"]
+    reference_solutions = index_data[reference_config_id].solutions
+    solutions = index_data[config_id].solutions
 
     metrics = Vector{RelevanceMetrics}()
     for (question, reference_sources) in reference_solutions
@@ -38,6 +38,6 @@ function compare_solutions_to_reference(index_data::Dict{String, Dict{String, An
 end
 
 function compare_solutions_to_reference(solution_store::SolutionStore, index_id::String, reference_config_id::String, config_id::String)::Union{RelevanceMetrics, Nothing}
-    haskey(solution_store.data, index_id) && return nothing
+    !haskey(solution_store.data, index_id) && return nothing
     compare_solutions_to_reference(solution_store.data[index_id], reference_config_id, config_id)
 end

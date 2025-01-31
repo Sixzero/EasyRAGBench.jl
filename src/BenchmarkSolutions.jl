@@ -11,7 +11,7 @@ export run_benchmark_comparison
 function findfirst(solution_store::SolutionStore, config_id::String)
     for (index_id, index_data) in solution_store.data
         if haskey(index_data, config_id)
-            return index_data[config_id]["metadata"]["config"]
+            return index_data[config_id].metadata["config"]
         end
     end
     nothing
@@ -19,7 +19,7 @@ end
 
 function collect_comparisons(index_data, reference_config_id::String)
     results = Dict()
-    ref_config = index_data[reference_config_id]["metadata"]["config"]
+    ref_config = index_data[reference_config_id].metadata["config"]
     
     for (config_id, config_data) in index_data
         config_id == reference_config_id && continue
@@ -27,7 +27,7 @@ function collect_comparisons(index_data, reference_config_id::String)
         metrics = compare_solutions_to_reference(index_data, reference_config_id, config_id)
         isnothing(metrics) && continue
         
-        config = config_data["metadata"]["config"]
+        config = config_data.metadata["config"]
         results["$reference_config_id vs $config_id"] = (
             metrics=metrics,
             ref_config=ref_config,

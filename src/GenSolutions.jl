@@ -47,7 +47,7 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
     ntasks = Threads.nthreads()
     ntasks = 8
     # ntasks = 1
-    map(enumerate(index_ids)) do (i, index_id)
+    asyncmap(enumerate(index_ids)) do (i, index_id)
         for (j, config) in enumerate(configs)
             @show config
             config_id = humanize(config)
