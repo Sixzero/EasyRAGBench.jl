@@ -2,139 +2,204 @@ using EasyContext
 using EasyRAGStore
 using Statistics
 using OrderedCollections
-
+using DataFrames  # Add this import
 
 export RelevanceMetrics, evaluate_relevance, summarize
 export compare_solutions, compare_solutions_to_reference
 export run_benchmark_comparison
 
+# Simple config lookup with clear warnings
 function findfirst(solution_store::SolutionStore, config_id::String)
-    for (index_id, index_data) in solution_store.data
-        if haskey(index_data, config_id)
-            return index_data[config_id].metadata["config"]
-        end
-    end
-    nothing
+    matches = [(id, data[config_id].metadata["config"]) 
+               for (id, data) in solution_store.data 
+               if haskey(data, config_id)]
+    
+    isempty(matches) && (@warn "Config '$config_id' not found"; return nothing)
+    length(matches) > 1 && @warn "Config '$config_id' found in multiple indices: $(join(first.(matches), ", "))"
+    
+    last(first(matches))
 end
 
-function collect_comparisons(index_data, reference_config_id::String)
-    results = Dict()
-    ref_config = index_data[reference_config_id].metadata["config"]
+# Simplified comparison collection
+function collect_comparisons(search_results, reference_config_id::String)
+    @info "Collecting comparisons" reference_config_id keys(search_results)
     
-    for (config_id, config_data) in index_data
+    !haskey(search_results, reference_config_id) && (@warn "Reference config not found"; return Dict())
+    ref_config = search_results[reference_config_id].metadata["config"]
+    ref_solutions = search_results[reference_config_id].solutions
+    
+    results = Dict()
+    for (config_id, config_data) in search_results
         config_id == reference_config_id && continue
         
-        metrics = compare_solutions_to_reference(index_data, reference_config_id, config_id)
+        solutions = config_data.solutions
+        missing_questions = setdiff(keys(ref_solutions), keys(solutions))
+        !isempty(missing_questions) && @warn "Model $config_id missing solutions for questions: $(join(missing_questions, ", "))"
+        
+        metrics = compare_solutions_to_reference(search_results, reference_config_id, config_id)
         isnothing(metrics) && continue
         
-        config = config_data.metadata["config"]
         results["$reference_config_id vs $config_id"] = (
-            metrics=metrics,
-            ref_config=ref_config,
-            config=config
+            metrics = metrics,
+            ref_config = ref_config,
+            config = config_data.metadata["config"]
         )
     end
-    results
+    
+    @info "Collected comparisons" num_results=length(results) comparison_pairs=keys(results)
+    return results
 end
 
-function calculate_mean_scores(comparison_results)
-    mean_scores = Dict()
-    
-    for (index_id, index_comparisons) in comparison_results
-        mean_scores[index_id] = Dict()
-        for (comparison, result) in index_comparisons
-            mean_scores[index_id][comparison] = (
-                f1_score = result.metrics.f1_score,
-                recall = result.metrics.recall,
-                precision = result.metrics.precision,
-                ref_config = result.ref_config,
-                config = result.config
-            )
-        end
-    end
-    mean_scores
+# ... other code remains same until calculate_scores ...
+
+struct BenchmarkScores
+    # Each row is a reference config, each column is a compared config
+    comparison_matrix::DataFrame  # Contains f1, recall, precision for each ref-config pair
+    per_chunk_scores::Dict{String, DataFrame}  # Same structure but per chunk
+    summary::DataFrame  # Overall summary statistics
 end
 
-function calculate_config_overall_scores(mean_scores)
-    scores_by_comparison = Dict()
+function calculate_scores(comparison_results)
+    @info "Calculating scores" num_chunks=length(comparison_results)
     
-    for (_, index_comparisons) in mean_scores
-        for (comparison, result) in index_comparisons
-            if !haskey(scores_by_comparison, comparison)
-                scores_by_comparison[comparison] = Dict(
-                    :f1_score => [], :recall => [], :precision => [],
-                    :ref_config => result.ref_config,
-                    :config => result.config
-                )
-            end
-            push!(scores_by_comparison[comparison][:f1_score], result.f1_score)
-            push!(scores_by_comparison[comparison][:recall], result.recall)
-            push!(scores_by_comparison[comparison][:precision], result.precision)
+    # First collect all unique configs
+    ref_configs = Set{String}()
+    compared_configs = Set{String}()
+    for (_, chunk_comparisons) in comparison_results
+        @info "Processing chunk" num_comparisons=length(chunk_comparisons)
+        for comparison in keys(chunk_comparisons)
+            ref_config, compared_config = split(comparison, " vs ")
+            push!(ref_configs, ref_config)
+            push!(compared_configs, compared_config)
         end
     end
+    ref_configs = sort(collect(ref_configs))
+    compared_configs = sort(collect(compared_configs))
+    @info "Found configs" num_ref_configs=length(ref_configs) num_compared_configs=length(compared_configs)
     
-    config_overall_scores = Dict()
-    for (comparison, scores) in scores_by_comparison
-        config_overall_scores[comparison] = Dict()
-        for metric in [:f1_score, :recall, :precision]
-            config_overall_scores[comparison][metric] = mean(scores[metric])
-        end
-        config_overall_scores[comparison][:ref_config] = scores[:ref_config]
-        config_overall_scores[comparison][:config] = scores[:config]
-    end
-    
-    config_overall_scores
-end
-
-function calculate_overall_mean_scores(mean_scores, reference_config)
-    scores = Dict()
-    for metric in [:f1_score, :recall, :precision]
-        scores[metric] = mean(
-            result[metric]
-            for (_, index_comparisons) in mean_scores
-            for (comparison, result) in index_comparisons
+    # Create per-chunk score matrices
+    per_chunk_scores = Dict{String, DataFrame}()
+    for (chunk_id, chunk_comparisons) in comparison_results
+        scores_df = DataFrame(
+            ref_config = String[],
+            compared_config = String[],
+            f1_score = Float64[],
+            recall = Float64[],
+            precision = Float64[],
+            timing = Float64[]  # Add timing column
         )
+        
+        for (comparison, result) in chunk_comparisons
+            ref_config, compared_config = split(comparison, " vs ")
+            # Get mean timing for this config's solutions
+            mean_timing = mean(values(result.config.timings))
+            push!(scores_df, (
+                ref_config,
+                compared_config,
+                result.metrics.f1_score,
+                result.metrics.recall,
+                result.metrics.precision,
+                mean_timing
+            ))
+        end
+        
+        per_chunk_scores[chunk_id] = scores_df
+        @info "Chunk scores" chunk_id size(scores_df)
     end
-    scores[:ref_config] = reference_config
-    scores
-end
-
-function benchmark_against_reference(solution_store::SolutionStore, reference_config_id::String)
-    comparison_results = Dict()
     
-    # Get reference config
-    reference_config = findfirst(solution_store, reference_config_id)
-    isnothing(reference_config) && @warn("Reference config not found: $reference_config_id") 
-    
-    # Collect comparisons
-    for (index_id, index_data) in solution_store.data
-        comparison_results[index_id] = collect_comparisons(index_data, reference_config_id)
-        isempty(comparison_results[index_id]) && delete!(comparison_results, index_id)
-    end
-
-    # Calculate scores
-    mean_scores = calculate_mean_scores(comparison_results)
-    config_overall_scores = calculate_config_overall_scores(mean_scores)
-    overall_mean_scores = calculate_overall_mean_scores(mean_scores, reference_config)
-    
-    return (;
-        comparison_results,
-        mean_scores,
-        config_overall_scores,
-        overall_mean_scores
+    # Create overall comparison matrix
+    comparison_matrix = DataFrame(
+        ref_config = String[],
+        compared_config = String[],
+        f1_score = Float64[],
+        recall = Float64[],
+        precision = Float64[]
     )
+    
+    # Calculate mean scores across all chunks
+    for ref_config in ref_configs
+        for compared_config in compared_configs
+            ref_config == compared_config && continue
+            
+            comparison = "$ref_config vs $compared_config"
+            
+            # Collect scores from all chunks that have this comparison
+            chunk_scores = Float64[]
+            chunk_recalls = Float64[]
+            chunk_precisions = Float64[]
+            
+            for df in values(per_chunk_scores)
+                rows = df[(df.ref_config .== ref_config) .& (df.compared_config .== compared_config), :]
+                if nrow(rows) > 0
+                    push!(chunk_scores, rows.f1_score[1])
+                    push!(chunk_recalls, rows.recall[1])
+                    push!(chunk_precisions, rows.precision[1])
+                end
+            end
+            
+            # Only add if we have scores
+            if !isempty(chunk_scores)
+                push!(comparison_matrix, (
+                    ref_config,
+                    compared_config,
+                    mean(chunk_scores),
+                    mean(chunk_recalls),
+                    mean(chunk_precisions)
+                ))
+            end
+        end
+    end
+    
+    @info "Final matrices" comparison_size=size(comparison_matrix) num_chunks=length(per_chunk_scores)
+    
+    # Create summary statistics
+    summary = combine(
+        groupby(comparison_matrix, :ref_config),
+        :f1_score => mean => :mean_f1,
+        :recall => mean => :mean_recall,
+        :precision => mean => :mean_precision,
+        :f1_score => std => :std_f1,
+        :recall => std => :std_recall,
+        :precision => std => :std_precision
+    )
+    
+    BenchmarkScores(comparison_matrix, per_chunk_scores, summary)
+end
+
+# Update the benchmark function to use new scoring
+function benchmark_against_reference(solution_store::SolutionStore, reference_config_id::String)
+    @info "Starting benchmark" reference_config_id
+    reference_config = findfirst(solution_store, reference_config_id)
+    isnothing(reference_config) && (@warn "Reference config not found"; return nothing)
+    
+    @info "Found reference config" num_indices=length(solution_store.data)
+    
+    comparison_results = Dict(
+        chunk_id => collect_comparisons(search_results, reference_config_id)
+        for (chunk_id, search_results) in solution_store.data
+        if !isempty(search_results)
+    )
+    
+    @info "Collected all comparisons" num_chunks=length(comparison_results)
+    
+    scores = calculate_scores(comparison_results)
+    
+    (comparison_results=comparison_results, scores=scores)
 end
 
 function run_benchmark_comparison(solution_file::String, reference_config_id::String, output_dir="benchmark_results")
     solution_store = SolutionStore(solution_file)
     results = benchmark_against_reference(solution_store, reference_config_id)
+    isnothing(results) && return nothing
     
+    @info "Benchmark results" comparison_results_size=length(results.comparison_results) scores_size=size(results.scores.comparison_matrix)
+    
+    # Update plotting function call to use the new DataFrame structure
     generate_benchmark_plots(
-        results.mean_scores,
-        results.config_overall_scores,
-        results.overall_mean_scores,
+        results.scores.comparison_matrix,
+        results.scores.per_chunk_scores,
+        results.scores.summary,
         output_dir
     )
-    
-    return results
+    results
 end

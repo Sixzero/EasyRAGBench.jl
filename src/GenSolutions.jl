@@ -4,14 +4,14 @@ using PromptingTools
 using PromptingTools.Experimental.RAGTools
 using OrderedCollections
 using JLD2
-using EasyContext: search, AbstractRAGConfig, get_source
+using EasyContext: search, AbstractRAGPipeline, get_source
 using EasyRAGStore: get_questions
 using ProgressMeter
 using Dates
 using EasyRAGStore: ensure_loaded!
 
 
-function generate_solution(store::RAGStore, index_id::String, config::AbstractRAGConfig, existing_solutions::OrderedDict{String, Vector{String}})
+function generate_solution(store::RAGStore, index_id::String, config::AbstractRAGPipeline, existing_solutions::OrderedDict{String, Vector{String}})
     chunks = EasyRAGStore.get_index(store, index_id)
     questions = get_questions(store, index_id)
 
@@ -35,7 +35,7 @@ function generate_solution(store::RAGStore, index_id::String, config::AbstractRA
     return SolutionResult(solutions, timings, current_time, metadata)
 end
 
-function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, configs::Vector{<:AbstractRAGConfig})
+function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, configs::Vector{<:AbstractRAGPipeline})
     ensure_loaded!(store)
     index_ids = collect(keys(store.dataset_store.chunks))
     total_indices = length(index_ids)
@@ -47,15 +47,15 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
     ntasks = Threads.nthreads()
     ntasks = 8
     # ntasks = 1
-    asyncmap(enumerate(index_ids)) do (i, index_id)
-        for (j, config) in enumerate(configs)
-            @show config
+    map(enumerate(index_ids)) do (i, index_id)
+        asyncmap(enumerate(configs)) do (j, config)
             config_id = humanize(config)
+            @show config_id
             existing_solutions = get_solutions(solution_store, index_id, config_id)
             result = generate_solution(store, index_id, config, existing_solutions)
             add_solutions!(solution_store, index_id, config_id, result)
             
-            println("  Completed config $j/$(length(configs)) for index $index_id")
+            println("  Completed: $config_id")
         end
         
         next!(progress; showvalues = [(:index, "$i/$total_indices"), (:current_id, index_id)])
@@ -67,7 +67,7 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
 end
 
 # Example usage
-function run_generation(rag_dataset_name::String, solution_file::String, configs::Vector{<:AbstractRAGConfig})
+function run_generation(rag_dataset_name::String, solution_file::String, configs::Vector{<:AbstractRAGPipeline})
     rag_store = RAGStore(rag_dataset_name)
     solution_store = SolutionStore(solution_file)
     

@@ -1,31 +1,44 @@
 using EasyRAGBench: run_generation, run_benchmark_comparison
 using EasyRAGStore: RAGStore
 using EasyContext: TwoLayerRAG, TopK, ReduceGPTReranker, create_jina_embedder, create_voyage_embedder, create_openai_embedder, BM25Embedder
+using EasyContext: rerank_prompt_v4
 
 # Define configurations to test
 configs = [
+    # TwoLayerRAG(
+    #     topK=TopK([create_voyage_embedder()], top_k=50),
+    #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="claude"),
+    # ),
     TwoLayerRAG(
-        topK=TopK([create_voyage_embedder(model="voyage-code-2")], top_k=50),
-        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="claude"),
-    ),
-    TwoLayerRAG(
-        topK=TopK([create_voyage_embedder(model="voyage-code-2")], top_k=120),
-        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="minimax")
-    ),
-    TwoLayerRAG(
-        topK=TopK([create_voyage_embedder(model="voyage-code-2"), BM25Embedder()], top_k=50),
-        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="minimax")
-    ),
-    TwoLayerRAG(
-        topK=TopK([create_voyage_embedder(model="voyage-code-2")], top_k=50),
-        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="minimax")
-    ),
-    TwoLayerRAG(
-        topK=TopK([create_voyage_embedder(model="voyage-code-2")], top_k=50),
-        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="gem15f"),
+        topK=TopK([create_voyage_embedder()], top_k=120),
+        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="o3m")
     ),
     # TwoLayerRAG(
-    #     topK=TopK([create_voyage_embedder(model="voyage-code-2")], top_k=90),
+    #     topK=TopK([create_voyage_embedder()], top_k=120),
+    #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="minimax")
+    # ),
+    # TwoLayerRAG(
+    #     topK=TopK([create_voyage_embedder(), BM25Embedder()], top_k=50),
+    #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="minimax")
+    # ),
+    # TwoLayerRAG(
+    #     topK=TopK([create_voyage_embedder()], top_k=50),
+    #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="minimax", rank_gpt_prompt_fn=rerank_prompt_v4)
+    # ),
+    TwoLayerRAG(
+        topK=TopK([create_voyage_embedder()], top_k=50),
+        reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="gpt4om", rank_gpt_prompt_fn=rerank_prompt_v4)
+    ),
+    # TwoLayerRAG(
+    #     topK=TopK([create_voyage_embedder()], top_k=50),
+    #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="dscode", rank_gpt_prompt_fn=rerank_prompt_v4)
+    # ),
+    # TwoLayerRAG(
+    #     topK=TopK([create_voyage_embedder()], top_k=50),
+    #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="gem20f", rank_gpt_prompt_fn=rerank_prompt_v4),
+    # ),
+    # TwoLayerRAG(
+    #     topK=TopK([create_voyage_embedder()], top_k=90),
     #     reranker=ReduceGPTReranker(batch_size=30, top_n=10, model="gem20f"),
     # ),
     # TwoLayerRAG(
@@ -126,5 +139,6 @@ using EasyContext: humanize
 import EasyRAGBench
 reference_config = humanize(configs[1])
 @show reference_config
+
 results = run_benchmark_comparison(solution_file, reference_config, "benchmark_results")
 ;
