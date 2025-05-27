@@ -1,7 +1,7 @@
 using EasyContext
 using EasyRAGStore
 using PromptingTools
-using PromptingTools.Experimental.RAGTools
+using RAGTools
 using OrderedCollections
 using JLD2
 using EasyContext: search, AbstractRAGPipeline, get_source
