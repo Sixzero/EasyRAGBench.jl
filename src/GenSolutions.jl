@@ -39,6 +39,7 @@ function generate_all_solutions(store::RAGStore, solution_store::SolutionStore, 
     ensure_loaded!(store)
     index_ids = collect(keys(store.dataset_store.chunks))
     total_indices = length(index_ids)
+    @show total_indices
     
     @info "Starting to generate solutions for $total_indices indices"
     
